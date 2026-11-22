@@ -1,0 +1,114 @@
+# ---------------------------------------------------------------------------
+# Tasks for the Email Crafting Crew
+#
+# Flow:
+#   analyze_message_task  (sync)
+#        ├── formal_draft_task    (async, runs in parallel)
+#        └── friendly_draft_task  (async, runs in parallel)
+#   final_email_task      (sync, waits for both drafts)
+#
+# `agent:` and `context:` refer to method names in file_agent.py.
+# Structured outputs (output_pydantic) and the code guardrail are attached in
+# file_agent.py because they are Python objects.
+#
+# Inputs: {message} {recipient_name} {sender_name} {preferred_tone} {extra_context}
+# ---------------------------------------------------------------------------
+
+analyze_message_task:
+  description: >
+    Analyse the raw message below before any email is written.
+
+    RAW MESSAGE: "{message}"
+    RECIPIENT: {recipient_name}
+    SENDER: {sender_name}
+    REQUESTED TONE: {preferred_tone}
+    EXTRA CONTEXT: {extra_context}
+
+    Steps:
+    1. Run the abbreviation_expander tool on the raw message and use its
+       expanded text as the source of truth.
+    2. Identify the sender's intent (e.g. status update, request, reminder,
+       apology, announcement).
+    3. List every key fact or action item that must appear in the final email.
+       Do NOT add facts that are not in the message or extra context.
+    4. Judge the urgency (low / medium / high) and the tone that best fits the
+       audience, taking the requested tone into account.
+    5. Note anything ambiguous the writers should handle carefully.
+  expected_output: >
+    A structured analysis containing: the expanded message, the abbreviations
+    found, the intent, the audience, the list of key points, urgency,
+    recommended tone, and any ambiguities.
+  agent: message_analyst
+
+formal_draft_task:
+  description: >
+    Using the analysis from the previous step, write a FORMAL, professional
+    email from {sender_name} to {recipient_name}.
+
+    Rules:
+    - Include every key point from the analysis; invent nothing.
+    - No slang, emojis or unexpanded abbreviations.
+    - Short paragraphs, clear call to action if the intent needs one.
+    - Keep the body under 150 words.
+  expected_output: >
+    Only the email, in this exact layout:
+    Subject: <subject line>
+
+    <greeting>,
+
+    <body>
+
+    <sign-off>,
+    {sender_name}
+  agent: formal_writer
+  context:
+    - analyze_message_task
+  async_execution: true
+  output_file: output/draft_formal.md
+
+friendly_draft_task:
+  description: >
+    Using the analysis from the previous step, write a FRIENDLY but
+    professional email from {sender_name} to {recipient_name}.
+
+    Rules:
+    - Include every key point from the analysis; invent nothing.
+    - Warm and positive, but no slang and no unexpanded abbreviations.
+    - Short paragraphs, clear call to action if the intent needs one.
+    - Keep the body under 150 words.
+  expected_output: >
+    Only the email, in this exact layout:
+    Subject: <subject line>
+
+    <greeting>,
+
+    <body>
+
+    <sign-off>,
+    {sender_name}
+  agent: friendly_writer
+  context:
+    - analyze_message_task
+  async_execution: true
+  output_file: output/draft_friendly.md
+
+final_email_task:
+  description: >
+    You have the original analysis plus two drafts (formal and friendly).
+
+    1. Compare both drafts against the key points in the analysis.
+    2. Choose the better draft for the requested tone ({preferred_tone}) or
+       merge the strongest parts of both.
+    3. Make sure the result: has a clear subject line, a greeting, a concise
+       body containing every key point, and a sign-off with {sender_name}.
+    4. Run the email_quality_checker tool on your full final email and fix
+       every issue it reports before answering.
+  expected_output: >
+    The final email split into subject, greeting, body and sign_off, plus
+    which draft it was based on (formal / friendly / merged) and a one-line
+    note explaining the choice.
+  agent: chief_editor
+  context:
+    - analyze_message_task
+    - formal_draft_task
+    - friendly_draft_task
